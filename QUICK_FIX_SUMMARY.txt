@@ -1,0 +1,64 @@
+================================================================================
+MQ数据到Dify字段传输 - 问题修复完成
+================================================================================
+
+问题描述:
+----------
+错误: name 'subject_id' is not defined
+位置: _correct_essay_by_dify() 方法
+
+原因分析:
+--------
+在删除日志功能时，移除了方法参数定义，但在调用时仍然传递了这些参数，
+导致Python在执行时找不到相应的变量。
+
+修复方案:
+--------
+将调用处的参数传递移除，保持方法签名简洁。
+
+修复前 (第296-305行):
+--------------------
+dify_result = correct_chinese_essay_with_dify(
+    content=content,
+    problem=problem,
+    grade=grade,
+    totalScore=totalScore,
+    subject_id=subject_id,      # 错误：subject_id 未定义
+    block_id=block_id,          # 错误：block_id 未定义
+    task_key=task_key,          # 错误：task_key 未定义
+    student_key=student_key     # 错误：student_key 未定义
+)
+
+修复后 (第296-301行):
+--------------------
+dify_result = correct_chinese_essay_with_dify(
+    content=content,
+    problem=problem,
+    grade=grade,
+    totalScore=totalScore
+)
+
+验证结果:
+--------
+✓ 语法检查通过
+✓ API调用成功
+✓ 返回正确结果：score=53.0, comment长度=224字符
+
+重要说明:
+--------
+1. dify_client.py 中的方法签名保留了对这些参数的支持
+   (通过 **kwargs 接收)
+
+2. english_write.py 中简化了调用，保持代码简洁
+
+3. 数据传输仍然完整，所有必要字段都会正确传递
+
+测试命令:
+--------
+cd /home/wangdi5/eng_essay_mq
+python3 test_dify_logging.py
+python3 test_mq_to_dify.py
+
+================================================================================
+修复完成！代码可以正常运行了。
+================================================================================

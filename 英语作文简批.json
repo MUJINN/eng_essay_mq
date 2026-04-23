@@ -1,0 +1,275 @@
+{
+  "name": "英语作文简批",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "/**\n * 统计英语作文中的单词数量\n * 适配新输入结构：作文文本位于 body.content 中\n */\n\n// 1. 获取所有输入项\nconst items = $input.all() || [];\n\n// 2. 遍历所有输入项\nitems.forEach((item) => {\n    // 3. 确保item和json存在，防止数据结构异常导致报错\n    if (!item) item = { json: {} };\n    if (!item.json) item.json = {};\n\n    // 4. 获取作文文本【核心修改：从body.content取数，适配新结构】\n    const essay = item.json.body?.content;\n\n    // 5. 统计单词数（原有逻辑不变，鲁棒性保留）\n    let wordCount = 0;\n    if (essay && typeof essay === 'string') {\n        // 匹配所有英文字母组成的单词，兼容大小写\n        const wordRegex = /[a-zA-Z]+/g;\n        const words = essay.match(wordRegex);\n        wordCount = words ? words.length : 0;\n    }\n\n    // 6. 为原始数据添加essay_num字段，存储单词统计数\n    item.json.essay_num = wordCount;\n\n    // 7. 打印日志，方便调试查看统计结果\n    console.log(`作文单词数: ${wordCount}`);\n});\n\n// 8. 返回处理后的数据，保持原有输出格式\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -16
+      ],
+      "id": "3b6338b8-85e5-4694-92d3-a9a5d733bdf9",
+      "name": "统计字数"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai_group/english/easy_essay",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        624,
+        -16
+      ],
+      "id": "1010366e-0023-4a6d-9f84-8e7e6ba6dc32",
+      "name": "接收学生信息",
+      "webhookId": "4d4d594f-6e58-4387-b6bb-9f922536280e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code节点专用 | 适配Markdown包裹的JSON格式 | 完整保留所有字段 | 仅校正格式\ntry {\n    // 1. 获取上游原始的content数据（带```json/```和换行）\n    const contentWithMarkdown = $input.first().json.content || '';\n    \n    // 2. 核心步骤：剥离Markdown的JSON包裹标记 + 清理多余换行/空格，提取纯JSON字符串\n    const pureJsonStr = contentWithMarkdown\n        .replace(/^```json\\s*/, '') // 去掉开头的```json和后续空白\n        .replace(/\\s*```$/, '')     // 去掉结尾的```和前面的空白\n        .replace(/\\n+/g, ' ')      // 清理所有多余换行符\n        .trim();                   // 清理首尾空格\n    \n    // 3. 解析纯JSON字符串为对象（此时是合法的JSON了）\n    const rawRoot = JSON.parse(pureJsonStr);\n    \n    // 4. 完整复制原始data的所有字段（包括comment/score/error_set等，一个不丢）\n    const finalData = { ...(rawRoot.data || {}) };\n\n    // 5. 仅对核心字段做【类型标准化校正】，不修改任何原始值\n    finalData.score = Number(finalData.score) || 0; // score强制数字\n    finalData.highlight = Array.isArray(finalData.highlight) ? finalData.highlight : []; // 强制数组\n    finalData.error_set = Array.isArray(finalData.error_set) \n        ? finalData.error_set.map(err => ({\n            ...err, // 完整保留错误项所有字段\n            offset: Number(err.offset) || 0, // 仅校正为数字\n            length: Number(err.length) || 0  // 仅校正为数字\n        }))\n        : [];\n\n    // 6. n8n标准输出：组装结果并返回\n    return [{ json: { data: finalData } }];\n\n} catch (error) {\n    // 异常兜底：打印错误日志（方便排查）+ 返回格式合法的空结构\n    console.error('【JSON处理失败详情】', error.message);\n    return [{\n        json: {\n            data: {\n                comment: '',\n                score: 0,\n                highlight: [],\n                error_set: []\n            }\n        }\n    }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        -32
+      ],
+      "id": "0533a685-bd6b-4711-b604-953629bba4be",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "model": "qwen3-8b",
+        "messages": {
+          "messageValues": [
+            {
+              "role": "system",
+              "textContent": "=任务：对OCR识别后的英语作文文本【{{ $json.body.content }}】进行纯修正，仅处理OCR技术误差，不批改、不标注任何学生主观错误，输出无标记纯净文本(只要文本，不要其他任何额外内容)，若英语作文文本为空，输出空（不必做任何说明）若英语作文文本为无关内容（如作文题号，则原样输出，不做任何说明）。\n### 一、OCR误差修正规则（严格执行）\n1. 必须修正的OCR特有错误（直接替换，无标注）：\n   - 字符混淆：修正\"l/1/i/I\"（如\"1earn\"→\"learn\"、\"1dea\"→\"Idea\"）、\"o/0\"（如\"g00d\"→\"good\"）、\"z/2\"（如\"2ero\"→\"zero\"）、\"b/d/p/q\"（如\"dook\"→\"book\"、\"qencil\"→\"pencil\"）、\"s/5\"（如\"5chool\"→\"school\"）等形近字符；\n   - 单词粘连/拆分：修复空格识别错误（如\"thissentence\"→\"this sentence\"、\"inmyopinion\"→\"in my opinion\"、\"a mazing\"→\"amazing\"、\"be cause\"→\"because\"）；\n   - 标点/符号异常：修正误识别符号（如\"™\"→\"'\"、\"¡\"→\"!\"、\"，\"→\",\"、\"。\"→\".\"），补充句末缺失标点（仅句子完整且无标点时补充，如\"I like English\"→\"I like English.\"）；\n   - 大小写误判：修正句子开头小写（如\"he went to school\"→\"He went to school\"）、专有名词小写（如\"ch1na\"→\"China\"）；\n   - 乱码/缺失字符：OCR识别为\"�\"、\"□\"或明显缺字符时，按上下文补充（如\"I __ink it's good\"→\"I think it's good\"），无法推测则保留\"[OCR未识别]\"（仅此处保留标记，因涉及语义完整性）。\n\n2. 绝对不修正的学生真实错误（原样保留，无标注）：\n   - 拼写错误：如\"definately\"（应为\"definitely\"）、\"seperate\"（应为\"separate\"）、\"their/there/they're\"混淆、\"to/too/two\"误用等；\n   - 语法错误：如\"runned\"（应为\"ran\"）、\"childs\"（应为\"children\"）、\"He like apples\"（应为\"likes\"）、时态/单复数错误等；\n   - 用词/表达错误：如\"open the light\"（应为\"turn on the light\"）、\"I very happy\"（应为\"I am very happy\"）等；\n   - 大小写主观错误：学生主动写\"i am a student\"、\"american\"等；\n   - 美式/英式拼写差异：如\"color/colour\"、\"center/centre\"，不强制统一。\n\n3. 修正执行标准：\n   - 仅做字符级/格式级修正，不增删原文语义、论据、句式；\n   - 修正后文本无任何标记（包括修正痕迹、错误提示），纯净可直接用于评分；\n   - 模糊边界（无法确定是OCR还是学生错误，如\"recieve\"），优先判定为学生错误，不修正、不标注。\n\n### 二、输出格式要求（结构化，不干扰评分,不做任何解释说明，只输出修正后的文本）\n1. 若英语作文文本不为空，修正后纯净文本：保留原文段落结构，仅包含作文内容（无任何标注、符号）\n2.若英语作文文本为空，则输出空"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "CUSTOM.mind",
+      "typeVersion": 1,
+      "position": [
+        1152,
+        -16
+      ],
+      "id": "082fe11b-f730-4953-ba64-0a70c6396166",
+      "name": "cor修正",
+      "credentials": {
+        "mindApi": {
+          "id": "oNmAkxS5ULjUBExz",
+          "name": "Mind account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "4fd7b78a-67b2-4187-a3bd-7c9dfca21aa7",
+              "name": "data.comment",
+              "value": "={{ $json.data.comment }}",
+              "type": "string"
+            },
+            {
+              "id": "e7b6d4c1-8a22-4ee6-b8ee-c5e4ba1391d7",
+              "name": "data.score",
+              "value": "={{ $json.data.score }}",
+              "type": "number"
+            },
+            {
+              "id": "be1af321-c4ce-4f27-8a4b-0ab5f2592ee6",
+              "name": "data.highlight",
+              "value": "={{ $json.data.highlight }}",
+              "type": "array"
+            },
+            {
+              "id": "d3123bec-66af-4fb8-899b-3c6fd8d401e3",
+              "name": "data.error_set",
+              "value": "={{ $json.data.error_set }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2288,
+        -32
+      ],
+      "id": "af54a453-f531-4772-b90b-b0ba9f010400",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "model": "glm-4.7",
+        "messages": {
+          "messageValues": [
+            {
+              "role": "system",
+              "textContent": "=#角色\n你是一个资深的{{ $('接收学生信息').item.json.body.grade }}英语老师 \n\n##任务 \n你的任务是根据下面的评分流程对学生作文进行严格评分，学生答案不为空时禁止给满分和0分（学生答案为空则给0分） \n\n##核心原则 \n先分析，后综合：先完成各维度的独立分析，再进行整体综合判定。 先定性，后定量：先通过编码进行定性归类，再通过计算进行定量赋分。 规则优于直觉：每一个分数点都应有明确的规则依据，最大限度减少主观随意性。 可解释性：评分过程应可被追溯和解释（例如：本文因主题编码为3、内容编码为4...故被定为二类文，并在该档位内计算得X分）。 学段适配：始终根据学生的认知发展阶段，调整评估的侧重点和宽容度。\n\n## 一、核心前提（适配变量总分+学段差异+基础维度+扣分规则）\n- **适用学段**：自动判定初中（7-9年级）/高中（10-12年级），高中对复杂语法、高级词汇、主题升华的要求高于初中；\n- **总分设定**：总分为变量total_score（可按题干要求修改），所有档位范围、编码阈值映射均基于该变量按比例计算；\n- **核心逻辑**：按“维度编码→整体档位判定→档位分数范围锁定→权重细化分数→扣减微调→边界控制”执行，**兼顾学段差异与标准化评分**；\n\n## 步骤1：题目解析（前置必填操作）\n提取作文题核心要素，为后续判定提供依据：\n1. **要点分类**：\n   - （1）事实类要点：需客观描述的信息（核心特征：有明确“信息指向”，非主观表达），题干常见关键词：活动类（安排、流程、形式、时间、地点）、事件类（人物、起因、经过、结果）、说明类（对象、特征、用途、数据）、论证类（论据、案例、数据、理论依据）；\n   - （2）主观类要点：需主观表达的信息（核心特征：观点/感受/意义，无客观标准答案），题干常见关键词：感受、观点、意义、启发、看法；\n2. **文体要求**：明确作文题指定文体（记叙文/议论文/应用文等），无指定时默认允许记叙文/议论文，应用文需严格遵循格式要求；\n3. **特殊要求**：明确字数要求、特殊格式（书信/通知/演讲稿等）、是否需结合特定场景/观点等。\n\n## 步骤2：维度编码判定（量化分级，适配学段差异）\n各维度按「档位等级+数字编码（5=最优表现→1=无效表现）」双标注，**量化标准统一，学段要求差异化**：\n\n### （一）要点覆盖度（核心维度1，贯穿全学段）\n1. **分析要点**：\n   （1）是否覆盖题干所有事实类+主观类要点；\n   （2）要点覆盖的完整性与准确性（语义匹配度）；\n   （3）注意：「部分覆盖」≠「缺失」：只要作文中提到要点的核心语义（如 “活动安排” 提到 “时间 / 地点 / 流程” 任一要素），即视为 “部分覆盖”，而非 “缺失”；表述模糊」≠「缺失」：如 “活动意义表述模糊”（仅说 “有意义”），仍视为 “覆盖该要点但质量低”，而非 “未覆盖”；「描述混乱」≠「缺失」：如活动安排 “描述混乱不具体”，但能识别 “开展了某类活动”，即视为 “部分覆盖”，归入 3-3.5 分区间。\n2. **编码评定**：\n- 编码5（全面覆盖）：明确提及了题目要求的所有事实类和主观类要点（例如，题目要点是3个，回答中能找到3个要点的直接或间接对应内容）。\n- 编码4（基本覆盖）：明确提及了绝大多数要点，可能有一个要点表述非常隐晦，但能合理推断出相关性。\n- 编码3（有所覆盖 - 新的及格线）：默认评分：只要回答了与题目相关的、不是完全无意义的内容，通常就应给3分；具体表现：回答中至少清晰覆盖了1个核心要点，或对多个要点均有提及但均非常简略、模糊。（例如：题目要求写“活动安排、意义、感受”，回答只写了“我们上午玩游戏，下午画画。我很开心。” → 这里覆盖了“安排（游戏、画画）”和“感受（开心）”，意义未提。已覆盖两个，故给3分。）\n- 编码2（极少覆盖）：回答内容仅与题目有微弱关联，只触碰到一个要点的边缘，或信息极其空洞。例如，题目问“春游安排和感受”，回答仅写“天气很好，我们出去了。”。\n- 编码1（未覆盖/偏离）：回答内容与题目主题完全无关（如题目问春游，回答写数学题），或完全空白、重复题干、写无关字符。\n\n### （二）语言准确性（核心维度2，学段要求差异化）\n1. **分析要点**：\n   （1）语法错误数量（轻微错误/严重错误）；\n   （2）复杂语法使用情况（符合学段要求）；\n   （3）词汇使用准确性（高级词汇占比，高中专属）；\n2. **编码评定**：\n   - **编码5（最优表现）**：初中要求零严重错误、≥2种复杂语法、允许2处不影响理解的笔误；高中要求零严重错误、≥3种复杂语法、高级词汇占比≥12%、允许1处笔误；\n   - **编码4（优秀表现）**：初中要求轻微错误≤4处、无严重错误、≥1种复杂语法；高中要求轻微错误≤3处、无严重错误、≥1种复杂语法；\n   - **编码3（合格表现）**：初中要求轻微错误≤6处、严重错误≤1处；高中要求轻微错误≤5处、严重错误≤1处；\n   - **编码2（较差表现）**：初中要求轻微错误≥6处、严重错误≥2处；高中要求轻微错误≥5处、严重错误≥2处；\n   - **编码1（无效表现）**：错误密集、严重阻碍理解，每10字错误≥3处且核心语义无法识别。\n\n### （三）结构逻辑性（形式维度1，注重框架与衔接）\n1. **分析要点**：\n   （1）文章框架完整性（开头-主体-结尾）；\n   （2）有效过渡词使用数量与逻辑适配性；\n   （3）段落划分合理性与逻辑关系多样性（高中专属）；\n   （4）过渡词判定原则：功能有效优先，形式错误不影响有效性（如拼写错误的First仍视为有效）；\n2. **编码评定**：\n   - **编码5（最优表现）**：初中要求框架完整、≥2处有效过渡词；高中要求框架严谨、≥3处有效过渡词、≥2种逻辑关系（转折、因果、递进等）；\n   - **编码4（优秀表现）**：初中要求框架完整、≥1处有效过渡词；高中要求框架完整、≥2处有效过渡词；\n   - **编码3（合格表现）**：框架基本完整（允许缺失非核心部分，如结尾简略）、≤1处有效过渡词；\n   - **编码2（较差表现）**：框架残缺，无明确开头/结尾，无过渡词或过渡词使用与语境矛盾；\n   - **编码1（无效表现）**：无逻辑结构，段落混乱/无分段，句子间无关联且无法拆分段落。\n\n### （四）书写规范（形式维度2，兼顾词数与格式）\n1. **分析要点**：\n   （1）词数是否符合规定范围；\n   （2）格式是否规范（应用文专属格式要素）；\n   （3）大小写错误数量；（忽略标点错误）\n2. **编码评定**：\n   - **编码5（最优表现）**：词数合规（不低于规定范围10%内），格式规范，应用文格式要素齐全，标点/大小写错误≤2处；\n   - **编码4（优秀表现）**：词数合规（不低于规定范围10%内），格式规范，大小写错误累计≤4处；\n   - **编码3（合格表现）**：词数不低于规定范围10%-20%，或格式缺失1个非核心要素（如书信无日期）；\n   - **编码2（较差表现）**：词数不低于规定范围20%以上，或格式缺失核心要素（如书信无称呼）；\n   - **编码1（无效表现）**：词数≤50字，或格式完全错误，或无效符号/乱码过多。\n\n## 步骤2.5：整体档位判定（衔接编码与分数）\n\n根据四个维度的编码组合，按\"从最高档到最低档依次匹配\"原则判定整体档位，**满足当前档位条件后立即锁定，不跨档匹配**：\n\n## 步骤2.5：整体档位判定（宽松逻辑）\n\n根据四个维度的编码组合，按照\"**就高不就低，优先宽松**\"的原则判定整体档位：\n\n### 档位判定逻辑\n\n1. **5档（最优档）**：需同时满足\n   - 要点覆盖度编码 ≥ 4\n   - 语言准确性编码 ≥ 4\n   - 结构逻辑性编码 ≥ 4\n   - 书写规范编码 ≥ 3\n\n2. **4档（优秀档）**：满足以下条件之一即可\n   - 要点覆盖度编码 ≥ 4，且语言准确性编码 ≥ 3，且结构逻辑性编码 ≥ 3\n   - 要点覆盖度编码 = 3，且语言准确性编码 ≥ 4，且结构逻辑性编码 ≥ 4\n   - 要点覆盖度编码 = 3，语言准确性编码 ≥ 3，结构逻辑性编码 ≥ 3，且无维度编码 ≤ 2\n\n3. **3档（合格档）**：满足以下条件之一即可\n   - 要点覆盖度编码 ≥ 3，且语言准确性编码 ≥ 2，且结构逻辑性编码 ≥ 2\n   - 要点覆盖度编码 = 2，但语言准确性编码 ≥ 3，且结构逻辑性编码 ≥ 3\n   - **宽松条件**：要点覆盖度编码 ≥ 3，即使语言准确性编码 = 2 且结构逻辑性编码 = 2，仍可判为3档\n\n4. **2档（较差档）**：满足以下条件之一即可\n   - 要点覆盖度编码 = 2，且语言准确性编码 ≤ 2\n   - 要点覆盖度编码 = 3，但语言准确性编码 = 1 或结构逻辑性编码 = 1\n   - 语言准确性编码 = 1 且结构逻辑性编码 = 1\n\n5. **1档（极差档）**：满足以下条件之一即可\n   - 要点覆盖度编码 = 1\n   - 语言准确性编码 = 1 且结构逻辑性编码 = 1 且要点覆盖度编码 ≤ 2\n\n6. **0档**：空白卷或完全跑题\n\n**宽松原则说明**：\n- 当作文可能符合多个档位时，选择较高的档位\n- 要点覆盖度是核心，只要达到基本要求（≥3），尽量不因语言和结构问题过度降档\n- 对于语言和结构双2分的情况，不自动降档，应综合考虑\n\n## 步骤3：档位分数范围锁定（匹配总分，区间量化）\n\n根据整体档位，确定作文的基础分数区间（基于总分total_score），**区间比例严格按规则执行**：\n\n- **5档（最优档）**：对应分数范围 = total_score × 90% ~ total_score × 100%；\n- **4档（优秀档）**：对应分数范围 = total_score × 80% ~ total_score × 90%；\n- **3档（合格档）**：对应分数范围 = total_score × 60% ~ total_score × 80%；\n- **2档（较差档）**：对应分数范围 = total_score × 30% ~ total_score × 60%；\n- **1档（极差档）**：对应分数范围 = total_score × 0.1% ~ total_score × 30%；\n- **0档**：对应分数 = 0分。\n\n## 步骤4：档位内具体分数计算（权重细化，公式量化）\n### 1. 固定维度权重（体现核心维度优先级）\n- **要点覆盖度**：45%（核心权重，贯穿全学段）；\n- **语言准确性**：20%（语言基础能力）；\n- **结构逻辑性**：25%（框架与衔接能力）；\n- **书写规范**：10%（格式与词数合规性）。\n\n### 2. 计算维度贡献分（细化档位内分数）\n- 第一步：计算档位分差=档位分数范围上限 - 档位分数范围下限（保留1位小数）；\n- 第二步：单维度贡献分=档位分差 × 该维度权重 ×（该维度编码/5）（保留1位小数，因编码为5级制）；\n- 第三步：总贡献分=要点贡献分+语言贡献分+结构贡献分+书写贡献分（保留1位小数）。\n\n### 3. 档位内基础分数\n- 计算公式：档位内基础分数=档位分数范围下限 + 总贡献分（保留1位小数）；\n- 边界控制：不得超出当前档位分数范围。\n\n## 步骤5：最终得分计算（扣减微调+边界控制）\n\n### 1. 极值复核\n- **满分（=total_score）**：需同时满足\n  （1）整体档位=5档，且四个维度编码均=5；\n  （2） 档位内基础分数=total_score；\n  （3） 无任何扣分项；\n  （4） 初中：主题升华自然不牵强、无语法堆砌；高中：主题升华有深度、高级词汇精准、无表达瑕疵；\n  （5） 整体流畅自然，超出同阶段常规水平。\n- **0分**：需满足任意1项\n  （1） 整体档位=0档；\n  （2） 空白卷；\n  （3） 内容含违法、违背公序良俗表述。\n\n### 2. 微调修正（极小幅度，不得跨档，以奖励为主）\n**微调原则**：根据各维度权重及表现进行档位内分数微调，微调分数不得跨档\n\n### 3. 最终得分确定\n- 计算公式：最终得分=扣减后分数 + 微调分（总微调幅度不得超过 total_score × 3%，保留整数，四舍五入）；\n- 强制边界：最终得分≤total_score且≥0分。\n\n## 输出内容\n（只输出以下内容，无关内容不要输出，只能输出中文）\n- 错误集合（error_set）（忽略标点符号类的错误）：\"offset\": 错误起始位置（从0开始的字符索引）,\"length\": 错误字符数,\"message\": \"错误描述/修改建议（简洁明了，尽量不超过20字）\",\"rule\": {\"id\": \"固定错误标识（大写英文\"LLM\"）\",\"category\": \"错误分类（从下方错误分类可选值中选取）\"\n- 亮点词汇（highlight）：\"亮点词汇\", [字符起始位置, 字符结束位置]；\n- 评分理由（comment）: \"简述评分理由\"；\n- 学生得分（score）：整数，num类型，不得超过题目总分，不可以是字符串；\n\n### 错误分类可选值\nERROR_SPELLING：拼写错误\nERROR_GRAMMAR：语法错误\nERROR_TENSE：时态错误\nERROR_PREPOSITION：介词错误\nERROR_CAPITALIZATION：大小写错误\n\n## 输出格式\n（json输出，不带其他无关内容，标点符号只能用英文的）\n{\n  \"data\": {\n    \"comment\": \"\"（简洁明了的评分理由）,\n    \"score\": 学生得分（0-{totalScore}之间的整数，如果是小数就四舍五入）,\n    \"highlight\": [\n      [\"亮点词汇\", [起始位置, 结束位置]],\n      [\"另一个亮点词汇\", [起始位置, 结束位置]]\n    ],\n    \"error_set\": [\n      {\n        \"offset\": 错误起始位置（从0开始的字符索引）,\n        \"length\": 错误字符数,\n        \"message\": \"错误描述/修改建议（简洁明了，尽量不超过20字，忽略标点符号类的错误）\",\n        \"rule\": {\n          \"id\": \"固定错误标识（大写英文\"LLM\"）\",\n          \"category\": \"错误分类（见错误分类可选值）\"\n        }\n      }\n    ]\n  }\n}\n\n### 重要提示\noffset和length都基于字符位置，从0开始计数\nhighlight格式：[文本, [起始位置, 结束位置]]\n只输出JSON，不要输出任何解释性文字"
+            },
+            {
+              "textContent": "=#题目的一些相关信息\n题干：【{{ $('接收学生信息').item.json.body.problem }}】\n题目（题干）总分(total_score):【{{ $('接收学生信息').item.json.body.totalScore }}】\n学生答案【{{ $json.originalEssay }}】\n学生答案的字数：【{{ $('统计字数').item.json.essay_num }}】\n年级：【{{ $('接收学生信息').item.json.body.grade }}】\n学生答案索引对照表：【{{ $json.formattedIndexStr }}】\n"
+            }
+          ]
+        },
+        "simpleMessage": "{\"reasoning_effort\":\"low\"}",
+        "options": {}
+      },
+      "type": "CUSTOM.mind",
+      "typeVersion": 1,
+      "position": [
+        1648,
+        -16
+      ],
+      "id": "ba818642-6ffc-4f16-8dd6-8dee07ce7d8b",
+      "name": "Mind API",
+      "credentials": {
+        "mindApi": {
+          "id": "oNmAkxS5ULjUBExz",
+          "name": "Mind account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code 节点 JS 脚本，提取作文文本的字符索引信息\n// 核心入参：$input.first().json.content （作文内容）\nconst inputData = $input.first().json;\n// 拿到作文内容，做非空校验\nconst essayContent = inputData.content || \"\";\n\n// 初始化返回结果\nconst result = {\n  // 保留原始作文内容，方便模型对照\n  originalEssay: essayContent,\n  // 字符-索引结构化映射（数组），每个元素含index(索引)、char(字符)，精准无遗漏\n  charIndexMap: [],\n  // 极简索引字符串（0:H,1:e,2: ,3:w...），方便模型快速读取\n  formattedIndexStr: \"\"\n};\n\n// 若作文内容为空，直接返回提示\nif (!essayContent) {\n  result.error = \"提示：未获取到作文内容，请检查入参content是否存在\";\n  return result;\n}\n\n// 遍历作文每个字符，生成索引映射（索引从0开始，包含空格/标点/换行）\nfor (let i = 0; i < essayContent.length; i++) {\n  const char = essayContent[i];\n  // 填充结构化映射数组\n  result.charIndexMap.push({\n    index: i,\n    char: char // 保留原始字符，包括空格、逗号、句号、换行等\n  });\n  // 拼接极简索引字符串（适配模型快速读取格式）\n  result.formattedIndexStr += `${i}:${char.replace(/,/g, '，')},`;\n}\n\n// 去除极简字符串末尾多余的逗号，保证格式整洁\nresult.formattedIndexStr = result.formattedIndexStr.slice(0, -1);\n\n// 核心返回：所有索引信息+原作文\nreturn result;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        -16
+      ],
+      "id": "6e6482ae-2ab6-41b7-9d16-7a4c277e3d6e",
+      "name": "获取完整文本索引"
+    }
+  ],
+  "pinData": {
+    "接收学生信息": [
+      {
+        "json": {
+          "headers": {
+            "host": "n8n.iyunxiao.com",
+            "x-real-ip": "10.12.0.34",
+            "x-forwarded-for": "10.11.3.100, 10.12.0.34",
+            "x-forwarded-proto": "http",
+            "x-forwarded-host": "n8n.iyunxiao.com",
+            "connection": "close",
+            "content-length": "1014",
+            "remote-host": "10.11.3.100",
+            "user-agent": "python-requests/2.28.1",
+            "accept-encoding": "gzip, deflate, br",
+            "accept": "*/*",
+            "content-type": "application/json"
+          },
+          "params": {},
+          "query": {},
+          "body": {
+            "task": "en-app",
+            "model": "llm",
+            "content": "He walked in front of the desk, angrily looked the books, which caused all the things. He held them, throat them here and there. Then Jack sit down, lay on the chair with no force. Neither moving or getting mad, Jack just stay at there. Jack was thinking, why I must study these subjects that I hate? Why mother always told me what to do? At the moment, his mother knocked the door, but Jack pretended didn't hear. He shaked his head and stared at these books. At the time, Jack looked a note, and heard his mother say, What do you want to eat? Don't hurt yourself, dear\nHe looked at the note, which it has writen come on, I believe you can make better",
+            "problem": "第二节（满分25分）\\\\\\\\n阅读下面材料，根据其内容和所给段落开头语续写两段，使之构成一篇完整的短文。\\\\\\\\n\\\\\\\\nIt was a regular Saturday morning, just like any other. I was driving my nine-year-old daughter, Emma, to her weekly swimming lesson. Recently, Emma had started seeing me as a true hero who could solve any problem fairly. \\\\\\\\\\\\\\\"You always know what's right, Dad,\\\\\\\\\\\\\\\" she would say. We were talking about her class when I noticed a crowd up ahead and had to slow down.\\\\\\\\n\\\\\\\\nPeople were gathered on the street, pointing and laughing. In the middle of it all was a large brown and white cow. It looked completely lost and terrified. Some kids were shouting nearby, which seemed to scare the animal even more. A strong feeling of anger rose inside me. These people were treating the poor creature's fear as entertainment.\\\\\\\\n\\\\\\\\n\\\\\\\\\\\\\\\"Dad, that cow is scared.\\\\\\\\\\\\\\\" Emma said softly from the back seat. \\\\\\\\\\\\\\\"What would you do?\\\\\\\\\\\\\\\" Her question was serious. She believed I would do the right thing. \\\\\\\\\\\\\\\"Well,\\\\\\\\\\\\\\\" I said, trying to sound confident for her, \\\\\\\\\\\\\\\"I would calm it down and help it find its way home.\\\\\\\\\\\\\\\" I explained that I knew a lot about cows. I spent my childhood on a farm, and now I even worked at a beef processing plant. I was sure my experience would impress Emma. After dropping off a very impressed Emma, I turned my car around. I felt it was my duty to go back and help.\\\\\\\\n\\\\\\\\nWhen I returned, the scene was worse. I learned from a shop owner that the cow had been wandering for a while, knocking over a fruit stand and causing quite a bit of trouble. I took a slow, careful step towards the animal, speaking in a gentle voice. However, instead of calming down, the cow lowered its head and let out a threatening sound. It stared directly at me, full of hostility. My confidence faded, replaced by a sudden fear. This wasn't going to be easy at all.\\\\\\\\n\\\\\\\\n**注意：**\\\\\\\\n1. 续写词数应为150个左右；\\\\\\\\n2. 请按如下格式在答题纸的相应位置作答。\\\\\\\\n\\\\\\\\n---\\\\\\\\n\\\\\\\\nJust as I was about to turn and run, two police officers arrived on the scene.\\\\\\\\n\\\\\\\\nAfter we managed to secure the cow to a tree, we began to discuss what to do with it.\\\\\\\\n\\\\\\\\n---",
+            "grade": "高二",
+            "totalScore": "25"
+          },
+          "webhookUrl": "https://n8n.iyunxiao.com/webhook/ai_group/english/easy_essay",
+          "executionMode": "production"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "统计字数": {
+      "main": [
+        [
+          {
+            "node": "cor修正",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "接收学生信息": {
+      "main": [
+        [
+          {
+            "node": "统计字数",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cor修正": {
+      "main": [
+        [
+          {
+            "node": "获取完整文本索引",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mind API": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "获取完整文本索引": {
+      "main": [
+        [
+          {
+            "node": "Mind API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ab5145f3-efb2-4a47-aa38-2dbe54d535a7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f9c5af66569f69179684c38f59102e50a5f7f957c85a29105bfa13e4043a12b6"
+  },
+  "id": "oYzoZ1zeKz5dxZDd",
+  "tags": []
+}
